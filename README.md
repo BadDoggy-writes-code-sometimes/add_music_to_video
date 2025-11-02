@@ -53,8 +53,12 @@ A desktop GUI application for merging video files with music tracks. Built with 
 ## Requirements
 
 ### System Requirements
-- Python 3.8 or higher
+- Python 3.8 or higher Built and tested with 3.12 
 - FFmpeg (required for video processing)
+
+### if you are on non Windows - sorry - offering very ltd support!
+
+
 
 ### Python Dependencies
 ```

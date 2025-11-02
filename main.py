@@ -3,6 +3,12 @@ Video + Music Merger GUI (MoviePy 2.1.2 compatible, final)
 
 A desktop application for merging video files with music tracks.
 Supports audio ducking, volume control, and real-time preview.
+BadDoggy-writes-code-sometimes and needed something to do this.
+https://github.com/BadDoggy-writes-code-sometimes/
+
+It works for me - buy me a beer if you want me to fix stuff.
+
+
 """
 from __future__ import annotations
 import os, sys, shutil
@@ -37,13 +43,11 @@ def ensure_ffmpeg_available() -> str:
         FileNotFoundError: If no FFmpeg executable is found
     """
     global ENGINE
-    
     # Try to find system-installed FFmpeg first (faster)
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path:
         ENGINE = "system-ffmpeg"
         return ffmpeg_path
-    
     # Fall back to bundled FFmpeg from imageio-ffmpeg
     try:
         ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
@@ -52,7 +56,6 @@ def ensure_ffmpeg_available() -> str:
             return ffmpeg_path
     except Exception:
         pass
-    
     # No FFmpeg found
     ENGINE = "disabled"
     raise FileNotFoundError("No FFmpeg executable found. Install FFmpeg or keep 'imageio-ffmpeg' installed.")
@@ -65,7 +68,6 @@ except Exception as e:
 
 # MoviePy imports - must come after FFmpeg setup
 from moviepy import VideoFileClip, AudioFileClip, CompositeAudioClip
-
 # Try to import volume effect (varies across MoviePy versions)
 try:
     from moviepy.audio.fx.MultiplyVolume import multiply_volume as volumex
@@ -74,7 +76,6 @@ except Exception:
         from moviepy.audio.fx.MultiplyVolume import volumex
     except Exception:
         volumex = None
-
 # Try to import audio looping effect (MoviePy 2.1.2+)
 try:
     from moviepy.audio.fx.AudioLoop import audio_loop
@@ -84,56 +85,52 @@ except Exception:
 def _safe_vol(clip, level: float):
     """
     Apply volume adjustment safely across different MoviePy versions.
-    
+
     Tries multiple methods in order of preference:
     1. Native clip.volumex() method
     2. Effect function via clip.fx(volumex, level)
     3. Manual lambda using clip.fl()
     4. No-op if level is approximately 1.0
-    
+
     Args:
         clip: AudioClip to adjust volume for
         level: Volume multiplier (1.0 = original, 0.5 = half volume, 2.0 = double)
-        
+
     Returns:
         AudioClip with adjusted volume
-        
+
     Raises:
         RuntimeError: If no volume method is available and level != 1.0
     """
-    # Method 1: Native volumex method
+    # 1) Native method if present
     try:
         if hasattr(clip, "volumex"):
             return clip.volumex(level)
     except Exception:
         pass
-    
-    # Method 2: Effect function via fx
+    # 2) Effect function via fx if available
     if callable(volumex):
         try:
             return clip.fx(volumex, level)
         except Exception:
             pass
-    
-    # Method 3: Manual fallback using AudioClip.fl (works in 2.1.2)
+    # 3) Manual fallback using AudioClip.fl (works in 2.1.2)
     try:
         if hasattr(clip, "fl") and callable(getattr(clip, "fl")):
             return clip.fl(lambda gf, t: gf(t) * float(level))
     except Exception:
         pass
-    
-    # Method 4: No-op if level is essentially 1.0
+    # 4) No-op if level ~ 1.0
     if abs(level - 1.0) < 1e-9:
         return clip
-    
-    # No method available - raise error
+    # 5) Give a helpful error
     raise RuntimeError("Volume effect not available in this MoviePy build.")
 
 @dataclass
 class SelectionState:
     """
     Data class to track user's file selections and output path.
-    
+
     Attributes:
         video_path: Path to the selected video file
         audio_path: Path to the selected music file
@@ -146,10 +143,10 @@ class SelectionState:
 class MergeWorker(QObject):
     """
     Background worker for video/audio merging operations.
-    
+
     Runs in a separate thread to prevent UI freezing during processing.
     Emits signals to update progress and report completion/errors.
-    
+
     Signals:
         finished: Emitted when merge completes successfully (with output path)
         failed: Emitted when merge fails (with error message)
@@ -162,7 +159,7 @@ class MergeWorker(QObject):
     def __init__(self, video_path, audio_path, output_path, music_level, original_level, duck):
         """
         Initialize the merge worker.
-        
+
         Args:
             video_path: Path to input video file
             audio_path: Path to input music file
@@ -183,31 +180,27 @@ class MergeWorker(QObject):
     def run(self):
         """
         Execute the video/audio merge operation.
-        
+
         Process:
         1. Load video and extract properties
         2. Load and adjust music volume
         3. Loop music to match video duration
         4. Mix with original audio if ducking is enabled
         5. Write final video file
-        
+
         Emits progress signals at key stages and finished/failed on completion.
         """
         try:
             # Check FFmpeg availability
             if ENGINE == "disabled":
                 raise RuntimeError("FFmpeg unavailable.")
-            
             self.progress.emit(5)
-            
             # Load video file
             with VideoFileClip(self.video_path) as v:
                 duration = v.duration or 0
                 v_fps = v.fps or 25
                 original_audio = v.audio
-                
                 self.progress.emit(20)
-                
                 # Load and adjust music volume
                 with AudioFileClip(self.audio_path) as music:
                     music = _safe_vol(music, self.music_level)
@@ -217,19 +210,17 @@ class MergeWorker(QObject):
                         try:
                             music = audio_loop(music, duration=duration)
                         except Exception:
-                            pass  # Fall back to raw length if fx fails
+                            pass  # fall back to raw length if fx fails
 
-                    # Mix original audio with music (ducking)
+                    # Mix original audio with music (ducking) or replace entirely
                     if self.duck and original_audio is not None:
                         bed = _safe_vol(original_audio, self.original_level)
                         mixed = CompositeAudioClip([bed, music])
                         merged_clip = v.with_audio(mixed)
                     else:
-                        # Replace original audio entirely
                         merged_clip = v.with_audio(music)
 
                     self.progress.emit(55)
-                    
                     # Write the final video file
                     merged_clip.write_videofile(
                         self.output_path,
@@ -240,17 +231,15 @@ class MergeWorker(QObject):
                         threads=0,                 # Use all available CPU cores
                         fps=v_fps,                 # Preserve original frame rate
                     )
-            
             self.progress.emit(100)
             self.finished.emit(self.output_path)
-            
         except Exception as e:
             self.failed.emit(str(e))
 
 class MainWindow(QMainWindow):
     """
     Main application window for the Video + Music Merger.
-    
+
     Provides:
     - Video and music file selection
     - Preview playback for both files
@@ -258,64 +247,51 @@ class MainWindow(QMainWindow):
     - Background merge processing with progress tracking
     - Output preview after merge completion
     """
-    
     def __init__(self):
         """Initialize the main window and all UI components."""
         super().__init__()
-        self.setWindowTitle("Video + Music Merger")
+        self.setWindowTitle("Video + Music Merger: BadDoggy-writes-code-sometimes")
         self.setMinimumSize(900, 600)
-        
         # Initialize selection state
         self.state = SelectionState()
-        
         # Show FFmpeg status message
         if ENGINE == "bundled-ffmpeg":
             QMessageBox.information(self, "Speed tip", "Bundled FFmpeg (slower). Install system FFmpeg for better speed.")
         elif ENGINE == "disabled":
             QMessageBox.warning(self, "FFmpeg missing", "Install FFmpeg to enable merging.")
-        
         # Set up video player for preview
         self.video_player = QMediaPlayer(self)
         self.video_output = QVideoWidget(self)
         self.video_player.setVideoOutput(self.video_output)
         self.video_audio = QAudioOutput(self)
         self.video_player.setAudioOutput(self.video_audio)
-        
         # Set up music player for preview
         self.music_player = QMediaPlayer(self)
         self.music_audio = QAudioOutput(self)
         self.music_player.setAudioOutput(self.music_audio)
-        
         # Status labels
         self.video_label = QLabel("No video selected")
         self.audio_label = QLabel("No music selected")
         self.output_label = QLabel("Output: not created yet")
-        
         # Video selection and playback controls
-        pick_video_btn = QPushButton("Select Video…")
+        pick_video_btn = QPushButton("Select Video¦")
         pick_video_btn.clicked.connect(self.pick_video)
-        
         self.play_video_btn = QPushButton(self.style().standardIcon(QStyle.SP_MediaPlay), " Play")
         self.play_video_btn.clicked.connect(self.toggle_video_play)
         self.play_video_btn.setEnabled(False)
-        
         # Music selection and playback controls
-        pick_audio_btn = QPushButton("Select Music…")
+        pick_audio_btn = QPushButton("Select Music¦")
         pick_audio_btn.clicked.connect(self.pick_audio)
-        
         self.play_audio_btn = QPushButton(self.style().standardIcon(QStyle.SP_MediaPlay), " Preview Music")
         self.play_audio_btn.clicked.connect(self.toggle_audio_play)
         self.play_audio_btn.setEnabled(False)
-        
         # Merge button and progress bar
-        self.merge_btn = QPushButton("Merge & Preview…")
+        self.merge_btn = QPushButton("Merge & Preview¦")
         self.merge_btn.setEnabled(False)
         self.merge_btn.clicked.connect(self.merge_and_preview)
-        
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        
         # Video group with preview widget
         video_group = QGroupBox("Video")
         vbox_video = QVBoxLayout()
@@ -327,7 +303,6 @@ class MainWindow(QMainWindow):
         vcontrols.addWidget(self.play_video_btn)
         vbox_video.addLayout(vcontrols)
         video_group.setLayout(vbox_video)
-        
         # Music group
         audio_group = QGroupBox("Music")
         vbox_audio = QVBoxLayout()
@@ -338,47 +313,39 @@ class MainWindow(QMainWindow):
         acontrols.addWidget(self.play_audio_btn)
         vbox_audio.addLayout(acontrols)
         audio_group.setLayout(vbox_audio)
-        
         # Mixing controls group
         mixing_group = QGroupBox("Mixing & Ducking")
         mix_layout = QVBoxLayout()
-        
         # Checkbox to enable/disable audio ducking
         self.keep_original_chk = QCheckBox("Keep original video audio (duck under music)")
         self.keep_original_chk.setChecked(True)
-        
         # Music volume slider (0-100%)
         self.music_slider = QSlider(Qt.Horizontal)
         self.music_slider.setRange(0, 100)
         self.music_slider.setValue(100)
         self.music_slider.valueChanged.connect(lambda v: self.music_label.setText(f"Music level: {v}%"))
         self.music_label = QLabel("Music level: 100%")
-        
         # Original audio volume slider (0-100%)
         self.original_slider = QSlider(Qt.Horizontal)
         self.original_slider.setRange(0, 100)
         self.original_slider.setValue(20)
         self.original_slider.valueChanged.connect(lambda v: self.original_label.setText(f"Original level: {v}%"))
         self.original_label = QLabel("Original level: 20%")
-        
         mix_layout.addWidget(self.keep_original_chk)
         mix_layout.addWidget(self.music_label)
         mix_layout.addWidget(self.music_slider)
         mix_layout.addWidget(self.original_label)
         mix_layout.addWidget(self.original_slider)
         mixing_group.setLayout(mix_layout)
-        
         # Bottom control bar
         bottom_controls = QHBoxLayout()
-        self.get_ffmpeg_btn = QPushButton("Get FFmpeg…")
+        self.get_ffmpeg_btn = QPushButton("Get FFmpeg¦")
         self.get_ffmpeg_btn.clicked.connect(self.show_ffmpeg_help)
         bottom_controls.addWidget(self.get_ffmpeg_btn)
         bottom_controls.addWidget(self.merge_btn)
         bottom_controls.addWidget(self.progress)
-        
         # Engine status label
         self.engine_label = QLabel(f"Engine: {ENGINE}")
-        
         # Assemble main layout
         central = QWidget()
         root = QVBoxLayout(central)
@@ -389,29 +356,22 @@ class MainWindow(QMainWindow):
         root.addLayout(bottom_controls)
         root.addWidget(self.engine_label)
         self.setCentralWidget(central)
-        
         # Create menu bar
         file_menu = self.menuBar().addMenu("&File")
-        
-        open_video_act = QAction("Open Video…", self)
+        open_video_act = QAction("Open Video¦", self)
         open_video_act.triggered.connect(self.pick_video)
         file_menu.addAction(open_video_act)
-        
-        open_audio_act = QAction("Open Music…", self)
+        open_audio_act = QAction("Open Music¦", self)
         open_audio_act.triggered.connect(self.pick_audio)
         file_menu.addAction(open_audio_act)
-        
         file_menu.addSeparator()
-        
         exit_act = QAction("E&xit", self)
         exit_act.triggered.connect(self.close)
         file_menu.addAction(exit_act)
-        
         help_menu = self.menuBar().addMenu("&Help")
-        get_ffmpeg_act = QAction("Get FFmpeg…", self)
+        get_ffmpeg_act = QAction("Get FFmpeg¦", self)
         get_ffmpeg_act.triggered.connect(self.show_ffmpeg_help)
         help_menu.addAction(get_ffmpeg_act)
-        
         # Connect playback state changes to update button icons/text
         self.video_player.playbackStateChanged.connect(self.update_video_play_button)
         self.music_player.playbackStateChanged.connect(self.update_music_play_button)
@@ -479,7 +439,7 @@ class MainWindow(QMainWindow):
     def merge_and_preview(self):
         """
         Start the video/audio merge process in a background thread.
-        
+
         Process:
         1. Validate that both files are selected
         2. Prompt user for output file location
@@ -494,7 +454,6 @@ class MainWindow(QMainWindow):
         if ENGINE == "disabled":
             QMessageBox.warning(self, "FFmpeg missing", "Install FFmpeg to enable export.")
             return
-        
         # Get output file path from user
         suggested = self.suggest_output_path(self.state.video_path)
         out_path, _ = QFileDialog.getSaveFileName(self, "Export merged video", suggested, "MP4 Video (*.mp4)")
@@ -502,11 +461,9 @@ class MainWindow(QMainWindow):
             return
         if not out_path.lower().endswith(".mp4"):
             out_path += ".mp4"
-        
         self.state.output_path = out_path
         self.merge_btn.setEnabled(False)
         self.progress.setValue(0)
-        
         # Create worker thread
         self.thread = QThread(self)
         self.worker = MergeWorker(
@@ -517,21 +474,18 @@ class MainWindow(QMainWindow):
             self.original_slider.value() / 100.0,
             self.keep_original_chk.isChecked(),
         )
-        
         # Move worker to thread and connect signals
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.progress.setValue)
         self.worker.finished.connect(self.on_merge_finished)
         self.worker.failed.connect(self.on_merge_failed)
-        
         # Clean up thread and worker when done
         self.worker.finished.connect(self.thread.quit)
         self.worker.failed.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.failed.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
-        
         # Start the merge
         self.thread.start()
 
@@ -539,28 +493,26 @@ class MainWindow(QMainWindow):
     def on_merge_finished(self, output_path: str):
         """
         Handle successful merge completion.
-        
+
         Updates UI, shows success message, and automatically plays the merged video.
-        
+
         Args:
             output_path: Path to the newly created merged video file
         """
         self.output_label.setText(f"Output: {os.path.basename(output_path)}")
         QMessageBox.information(self, "Done", f"Merged video saved to:\n{output_path}")
-        
         # Load and play the merged video
         self.video_player.setSource(QUrl.fromLocalFile(output_path))
         self.video_player.play()
-        
         self.enable_merge_if_ready()
 
     @Slot(str)
     def on_merge_failed(self, err: str):
         """
         Handle merge failure.
-        
+
         Displays error message and re-enables merge button.
-        
+
         Args:
             err: Error message describing what went wrong
         """
@@ -571,10 +523,10 @@ class MainWindow(QMainWindow):
     def suggest_output_path(video_path: str) -> str:
         """
         Generate a suggested output filename based on the input video.
-        
+
         Args:
             video_path: Path to the input video file
-            
+
         Returns:
             Suggested output path with "_with_music" suffix
         """
